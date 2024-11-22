@@ -16,10 +16,9 @@ __global__ void compare(
         return;
     }
 
-    bool is_greater_or_equal = false;
+    bool is_greater_or_equal = true;
     for (int i = 7; i >= 0; --i) {
         if (a[idx][i] > b[idx][i]) {
-            is_greater_or_equal = true;
             break;
         }
         else if (a[idx][i] < b[idx][i]) {
@@ -49,7 +48,7 @@ int main() {
     // Initialize input on host
     std::random_device rd;  // Seed
     std::mt19937 gen(rd()); // Random number generator
-    std::uniform_int_distribution<uint32_t> dist(0, 0xFFFFFFFF); // Full 32-bit range
+    std::uniform_int_distribution<uint32_t> dist(0, 0xF); // Full 32-bit range
 
     for (int i = 0; i < n * k; ++i) {
         host_a[i] = dist(gen); // Generate random 32-bit non-negative integer
