@@ -4,6 +4,9 @@
 #include <iostream>
 #include <random>
 
+#define CHUNK_BIT_SIZE 4
+#define THREADS_PER_BLOCK 256
+
 // Kernel to compare two 256-bit integers
 template <typename scalar_t>
 __global__ void compare(
@@ -181,7 +184,7 @@ void copyHostToDeviceAsync(int n, int k,
 
 // Function to launch compare kernel
 void launchCompareKernel(int n, torch::Tensor& a, torch::Tensor& b, torch::Tensor& compare_result, cudaStream_t stream) {
-    int threads = 256;
+    int threads = THREADS_PER_BLOCK;
     int blocks = (n + threads - 1) / threads;
 
     compare<uint32_t> << <blocks, threads, 0, stream >> > (
@@ -194,10 +197,10 @@ void launchCompareKernel(int n, torch::Tensor& a, torch::Tensor& b, torch::Tenso
 
 // Function to launch add kernel
 void launchAddKernel(int n, torch::Tensor& a, torch::Tensor& b, torch::Tensor& add_result, torch::Tensor& carry_result, cudaStream_t stream) {
-    int threads = 256;
+    int threads = THREADS_PER_BLOCK;
     int blocks = (n + threads - 1) / threads;
 
-    add<uint32_t, 4> << <blocks, threads, 0, stream >> > (
+    add<uint32_t, CHUNK_BIT_SIZE> << <blocks, threads, 0, stream >> > (
         a.packed_accessor32<uint32_t, 2, torch::RestrictPtrTraits>(),
         b.packed_accessor32<uint32_t, 2, torch::RestrictPtrTraits>(),
         add_result.packed_accessor32<uint32_t, 2, torch::RestrictPtrTraits>(),
@@ -216,7 +219,7 @@ void prepareSubtractionData(
     torch::Tensor& sub_b,
     cudaStream_t stream)
 {
-    int threads = 256;
+    int threads = THREADS_PER_BLOCK;
     int blocks = ((n * k) + threads - 1) / threads;
 
     prepare_subtraction_data_kernel<<<blocks, threads, 0, stream>>>(
@@ -230,10 +233,10 @@ void prepareSubtractionData(
 
 // Function to launch subtraction kernel
 void launchSubKernel(int n, torch::Tensor& sub_a, torch::Tensor& sub_b, torch::Tensor& sub_result, cudaStream_t stream) {
-    int threads = 256;
+    int threads = THREADS_PER_BLOCK;
     int blocks = (n + threads - 1) / threads;
 
-    sub<uint32_t, 4> << <blocks, threads, 0, stream >> > (
+    sub<uint32_t, CHUNK_BIT_SIZE> << <blocks, threads, 0, stream >> > (
         sub_a.packed_accessor32<uint32_t, 2, torch::RestrictPtrTraits>(),
         sub_b.packed_accessor32<uint32_t, 2, torch::RestrictPtrTraits>(),
         sub_result.packed_accessor32<uint32_t, 2, torch::RestrictPtrTraits>(),
