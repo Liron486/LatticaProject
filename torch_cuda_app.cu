@@ -87,6 +87,32 @@ __global__ void sub(
     }
 }
 
+__global__ void prepare_subtraction_data_kernel(
+    const torch::PackedTensorAccessor32<int, 1, torch::RestrictPtrTraits> compare_result,
+    const torch::PackedTensorAccessor32<uint32_t, 2, torch::RestrictPtrTraits> a,
+    const torch::PackedTensorAccessor32<uint32_t, 2, torch::RestrictPtrTraits> b,
+    torch::PackedTensorAccessor32<uint32_t, 2, torch::RestrictPtrTraits> sub_a,
+    torch::PackedTensorAccessor32<uint32_t, 2, torch::RestrictPtrTraits> sub_b,
+    int n, int k)
+{
+    int idx = blockIdx.x * blockDim.x + threadIdx.x;
+    if (idx >= n * k) {
+        return;
+    }
+
+    int row = idx / k;
+    int col = idx % k;
+
+    if (compare_result[row] == 1) {
+        sub_a[row][col] = a[row][col];
+        sub_b[row][col] = b[row][col];
+    }
+    else {
+        sub_a[row][col] = b[row][col];
+        sub_b[row][col] = a[row][col];
+    }
+}
+
 // Function to allocate and initialize host memory
 void allocateAndInitializeHostMemory(int n, int k,
     uint32_t*& host_a,
@@ -180,35 +206,26 @@ void launchAddKernel(int n, torch::Tensor& a, torch::Tensor& b, torch::Tensor& a
         );
 }
 
-// Function to handle comparison results and prepare data for subtraction
-void handleComparisonResultsAndPrepareSubtractionData(
+// Function to prepare data for subtraction on the device
+void prepareSubtractionData(
     int n, int k,
-    int* host_compare_result,
-    uint32_t* host_a,
-    uint32_t* host_b,
     torch::Tensor& compare_result,
+    torch::Tensor& a,
+    torch::Tensor& b,
     torch::Tensor& sub_a,
     torch::Tensor& sub_b,
-    cudaStream_t stream
-) {
-    // Copy comparison results from device to host
-    cudaMemcpyAsync(host_compare_result, compare_result.data_ptr<int>(), n * sizeof(int), cudaMemcpyDeviceToHost, stream);
-    cudaStreamSynchronize(stream);
+    cudaStream_t stream)
+{
+    int threads = 256;
+    int blocks = ((n * k) + threads - 1) / threads;
 
-    // Prepare data for subtraction based on comparison results
-    for (int i = 0; i < n; ++i) {
-        if (host_compare_result[i] == 1) {
-            // Send a and b as-is
-            cudaMemcpyAsync(sub_a.data_ptr<uint32_t>() + i * k, host_a + i * k, k * sizeof(uint32_t), cudaMemcpyHostToDevice, stream);
-            cudaMemcpyAsync(sub_b.data_ptr<uint32_t>() + i * k, host_b + i * k, k * sizeof(uint32_t), cudaMemcpyHostToDevice, stream);
-        }
-        else {
-            // Send b and a in reversed order
-            cudaMemcpyAsync(sub_a.data_ptr<uint32_t>() + i * k, host_b + i * k, k * sizeof(uint32_t), cudaMemcpyHostToDevice, stream);
-            cudaMemcpyAsync(sub_b.data_ptr<uint32_t>() + i * k, host_a + i * k, k * sizeof(uint32_t), cudaMemcpyHostToDevice, stream);
-        }
-    }
-    cudaStreamSynchronize(stream);
+    prepare_subtraction_data_kernel<<<blocks, threads, 0, stream>>>(
+        compare_result.packed_accessor32<int, 1, torch::RestrictPtrTraits>(),
+        a.packed_accessor32<uint32_t, 2, torch::RestrictPtrTraits>(),
+        b.packed_accessor32<uint32_t, 2, torch::RestrictPtrTraits>(),
+        sub_a.packed_accessor32<uint32_t, 2, torch::RestrictPtrTraits>(),
+        sub_b.packed_accessor32<uint32_t, 2, torch::RestrictPtrTraits>(),
+        n, k);
 }
 
 // Function to launch subtraction kernel
@@ -224,24 +241,30 @@ void launchSubKernel(int n, torch::Tensor& sub_a, torch::Tensor& sub_b, torch::T
         );
 }
 
-// Function to copy data from device to host asynchronously
+// Updated function to copy data from device to host asynchronously
 void copyDeviceToHostAsync(
     int n, int k,
     uint32_t* host_add_result,
     int* host_carry_result,
     uint32_t* host_sub_result,
+    int* host_compare_result, // Added this parameter
     torch::Tensor& add_result,
     torch::Tensor& carry_result,
     torch::Tensor& sub_result,
+    torch::Tensor& compare_result, // Added this parameter
     cudaStream_t stream_add,
     cudaStream_t stream_sub
-) {
+)
+{
     // Copy addition results
     cudaMemcpyAsync(host_add_result, add_result.data_ptr<uint32_t>(), n * k * sizeof(uint32_t), cudaMemcpyDeviceToHost, stream_add);
     cudaMemcpyAsync(host_carry_result, carry_result.data_ptr<int>(), n * sizeof(int), cudaMemcpyDeviceToHost, stream_add);
 
     // Copy subtraction results
     cudaMemcpyAsync(host_sub_result, sub_result.data_ptr<uint32_t>(), n * k * sizeof(uint32_t), cudaMemcpyDeviceToHost, stream_sub);
+
+    // Copy comparison results
+    cudaMemcpyAsync(host_compare_result, compare_result.data_ptr<int>(), n * sizeof(int), cudaMemcpyDeviceToHost, stream_sub);
 }
 
 // Function to print results
@@ -327,7 +350,7 @@ void freeResources(
 int main() {
     int n = 1; // Number of 256-bit integers in the batch
     int k = 8; // Number of 32-bit segments per integer
-
+    
     torch::Device device(torch::kCUDA);
 
     // Host memory pointers
@@ -365,17 +388,17 @@ int main() {
     launchCompareKernel(n, a, b, compare_result, stream1);
     launchAddKernel(n, a, b, add_result, carry_result, stream2);
 
-    // Prepare data for subtraction
+    // Prepare data for subtraction on the device
     torch::Tensor sub_a = torch::zeros({ n, k }, torch::kUInt32).to(device);
     torch::Tensor sub_b = torch::zeros({ n, k }, torch::kUInt32).to(device);
-
-    handleComparisonResultsAndPrepareSubtractionData(n, k, host_compare_result, host_a, host_b, compare_result, sub_a, sub_b, stream1);
+    prepareSubtractionData(n, k, compare_result, a, b, sub_a, sub_b, stream1);
 
     // Launch subtraction kernel
     launchSubKernel(n, sub_a, sub_b, sub_result, stream1);
 
     // Copy results from device to host asynchronously
-    copyDeviceToHostAsync(n, k, host_add_result, host_carry_result, host_sub_result, add_result, carry_result, sub_result, stream2, stream1);
+    copyDeviceToHostAsync(n, k, host_add_result, host_carry_result, host_sub_result, host_compare_result,
+        add_result, carry_result, sub_result, compare_result, stream2, stream1);
 
     // Synchronize streams
     cudaStreamSynchronize(stream1);
