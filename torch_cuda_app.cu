@@ -25,8 +25,8 @@ constexpr int k = 8; // Number of 32-bit segments per integer
 template <typename scalar_t>
 __device__ int compare_bigint(
     const scalar_t* a,
-    const scalar_t* b
-) {
+    const scalar_t* b)
+{
     for (int i = k - 1; i >= 0; --i) {
         if (a[i] > b[i]) {
             return 1;
@@ -43,8 +43,8 @@ __device__ void add_bigint(
     const scalar_t* a,
     const scalar_t* b,
     scalar_t* result,
-    scalar_t& carry_result
-) {
+    scalar_t& carry_result)
+{
     const uint64_t modulo = (1ULL << BIT_SIZE);
     const uint64_t carry_mask = modulo - 1;
 
@@ -61,8 +61,8 @@ template <typename scalar_t, int BIT_SIZE>
 __device__ void sub_bigint(
     const scalar_t* a,
     const scalar_t* b,
-    scalar_t* result
-) {
+    scalar_t* result)
+{
     uint64_t borrow = 0;
     for (int i = 0; i < n; ++i) {
         uint64_t diff = (uint64_t)a[i] - (uint64_t)b[i] - borrow;
@@ -82,8 +82,8 @@ template <typename scalar_t>
 __global__ void compare(
     const torch::PackedTensorAccessor32<scalar_t, 2, torch::RestrictPtrTraits> a,
     const torch::PackedTensorAccessor32<scalar_t, 2, torch::RestrictPtrTraits> b,
-    torch::PackedTensorAccessor32<int, 1, torch::RestrictPtrTraits> result
-) {
+    torch::PackedTensorAccessor32<int, 1, torch::RestrictPtrTraits> result)
+{
     int idx = blockIdx.x * blockDim.x + threadIdx.x;
     result[idx] = compare_bigint<scalar_t>(&a[idx][0], &b[idx][0]) >= 0 ? 1 : 0;
 }
@@ -94,8 +94,8 @@ __global__ void add(
     const torch::PackedTensorAccessor32<scalar_t, 2, torch::RestrictPtrTraits> a,
     const torch::PackedTensorAccessor32<scalar_t, 2, torch::RestrictPtrTraits> b,
     torch::PackedTensorAccessor32<scalar_t, 2, torch::RestrictPtrTraits> add_result,
-    torch::PackedTensorAccessor32<int, 1, torch::RestrictPtrTraits> carry_out
-) {
+    torch::PackedTensorAccessor32<int, 1, torch::RestrictPtrTraits> carry_out)
+{
     int idx = blockIdx.x * blockDim.x + threadIdx.x;
     if (idx >= n) return;
 
@@ -116,8 +116,8 @@ template <typename scalar_t, int BIT_SIZE>
 __global__ void sub(
     const torch::PackedTensorAccessor32<scalar_t, 2, torch::RestrictPtrTraits> a,
     const torch::PackedTensorAccessor32<scalar_t, 2, torch::RestrictPtrTraits> b,
-    torch::PackedTensorAccessor32<scalar_t, 2, torch::RestrictPtrTraits> sub_result
-) {
+    torch::PackedTensorAccessor32<scalar_t, 2, torch::RestrictPtrTraits> sub_result)
+{
     int idx = blockIdx.x * blockDim.x + threadIdx.x;
     if (idx >= n) return;
 
@@ -267,7 +267,8 @@ void copyHostToDeviceAsync(
 }
 
 // Function to launch compare kernel
-void launchCompareKernel(torch::Tensor& a, torch::Tensor& b, torch::Tensor& compare_result, cudaStream_t stream) {
+void launchCompareKernel(torch::Tensor& a, torch::Tensor& b, torch::Tensor& compare_result, cudaStream_t stream)
+{
     int threads = THREADS_PER_BLOCK;
     int blocks = (n + threads - 1) / threads;
 
@@ -278,7 +279,8 @@ void launchCompareKernel(torch::Tensor& a, torch::Tensor& b, torch::Tensor& comp
 }
 
 // Function to launch add kernel
-void launchAddKernel(torch::Tensor& a, torch::Tensor& b, torch::Tensor& add_result, torch::Tensor& carry_result, cudaStream_t stream) {
+void launchAddKernel(torch::Tensor& a, torch::Tensor& b, torch::Tensor& add_result, torch::Tensor& carry_result, cudaStream_t stream)
+{
     int threads = THREADS_PER_BLOCK;
     int blocks = (n + threads - 1) / threads;
 
@@ -310,7 +312,8 @@ void prepareSubtractionData(
 }
 
 // Function to launch subtraction kernel
-void launchSubKernel(torch::Tensor& sub_a, torch::Tensor& sub_b, torch::Tensor& sub_result, cudaStream_t stream) {
+void launchSubKernel(torch::Tensor& sub_a, torch::Tensor& sub_b, torch::Tensor& sub_result, cudaStream_t stream) 
+{
     int threads = THREADS_PER_BLOCK;
     int blocks = (n + threads - 1) / threads;
 
@@ -321,7 +324,8 @@ void launchSubKernel(torch::Tensor& sub_a, torch::Tensor& sub_b, torch::Tensor& 
 }
 
 // Function to launch modadd kernel
-void launchModAddKernel(torch::Tensor& a, torch::Tensor& b, torch::Tensor& q, torch::Tensor& modadd_result, cudaStream_t stream) {
+void launchModAddKernel(torch::Tensor& a, torch::Tensor& b, torch::Tensor& q, torch::Tensor& modadd_result, cudaStream_t stream) 
+{
     int threads = THREADS_PER_BLOCK;
     int blocks = (n + threads - 1) / threads;
 
@@ -466,7 +470,8 @@ void freeResources(
     if (event) cudaEventDestroy(event);
 }
 
-int main() {
+int main() 
+{
     torch::Device device(torch::kCUDA);
 
     // Host memory pointers
