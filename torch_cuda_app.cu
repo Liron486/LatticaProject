@@ -11,6 +11,17 @@
 constexpr int n = 8; // Number of 256-bit integers in the batch
 constexpr int k = 8; // Number of 32-bit segments per integer
 
+// Error-checking macro
+#define CHECK_CUDA_ERROR(call)                                                                 \
+    do {                                                                                       \
+        cudaError_t error = call;                                                              \
+        if (error != cudaSuccess) {                                                            \
+            std::cerr << "CUDA Error at " << __FILE__ << ":" << __LINE__                       \
+                      << " (" << cudaGetErrorString(error) << ")" << std::endl;                \
+            return;                                                                            \
+        }                                                                                      \
+    } while (0)
+
 template <typename scalar_t>
 __device__ int compare_bigint(
     const scalar_t* a,
@@ -186,22 +197,20 @@ void allocateAndInitializeHostMemory(
     uint32_t*& host_add_result,
     int*& host_carry_result,
     uint32_t*& host_sub_result,
-    uint32_t*& host_q, 
+    uint32_t*& host_q,
     uint32_t*& host_modadd_result)
 {
-    // Allocate pinned host memory for overlapping
-    cudaMallocHost(&host_a, n * k * sizeof(uint32_t));
-    cudaMallocHost(&host_b, n * k * sizeof(uint32_t));
-    cudaMallocHost(&host_compare_result, n * sizeof(int));
-    cudaMallocHost(&host_add_result, n * k * sizeof(uint32_t));
-    cudaMallocHost(&host_carry_result, n * sizeof(int));
-    cudaMallocHost(&host_sub_result, n * k * sizeof(uint32_t));
-    cudaMallocHost(&host_q, n * k * sizeof(uint32_t)); 
-    cudaMallocHost(&host_modadd_result, n * k * sizeof(uint32_t)); 
+    CHECK_CUDA_ERROR(cudaMallocHost(&host_a, n * k * sizeof(uint32_t)));
+    CHECK_CUDA_ERROR(cudaMallocHost(&host_b, n * k * sizeof(uint32_t)));
+    CHECK_CUDA_ERROR(cudaMallocHost(&host_compare_result, n * sizeof(int)));
+    CHECK_CUDA_ERROR(cudaMallocHost(&host_add_result, n * k * sizeof(uint32_t)));
+    CHECK_CUDA_ERROR(cudaMallocHost(&host_carry_result, n * sizeof(int)));
+    CHECK_CUDA_ERROR(cudaMallocHost(&host_sub_result, n * k * sizeof(uint32_t)));
+    CHECK_CUDA_ERROR(cudaMallocHost(&host_q, n * k * sizeof(uint32_t)));
+    CHECK_CUDA_ERROR(cudaMallocHost(&host_modadd_result, n * k * sizeof(uint32_t)));
 
-    // Initialize input on host
-    std::random_device rd;  // Seed
-    std::mt19937 gen(rd()); // Random number generator
+    std::random_device rd;
+    std::mt19937 gen(rd());
     uint32_t max_value = (1u << CHUNK_BIT_SIZE) - 1;
     std::uniform_int_distribution<uint32_t> dist(0, max_value);
 
@@ -236,12 +245,9 @@ void allocateDeviceMemory(
 
 // Function to create streams and events
 void createStreamsAndEvents(cudaStream_t& stream1, cudaStream_t& stream2, cudaEvent_t& event) {
-    // Create CUDA streams
-    cudaStreamCreate(&stream1);
-    cudaStreamCreate(&stream2);
-
-    // Create a CUDA event for synchronization
-    cudaEventCreate(&event);
+    CHECK_CUDA_ERROR(cudaStreamCreate(&stream1));
+    CHECK_CUDA_ERROR(cudaStreamCreate(&stream2));
+    CHECK_CUDA_ERROR(cudaEventCreate(&event));
 }
 
 // Function to copy data from host to device asynchronously
@@ -444,19 +450,20 @@ void freeResources(
     uint32_t* host_modadd_result,
     cudaStream_t stream1,
     cudaStream_t stream2,
-    cudaEvent_t event
-) {
+    cudaEvent_t event)
+{
     cudaFreeHost(host_a);
     cudaFreeHost(host_b);
     cudaFreeHost(host_compare_result);
     cudaFreeHost(host_add_result);
     cudaFreeHost(host_carry_result);
     cudaFreeHost(host_sub_result);
-    cudaFreeHost(host_q); 
+    cudaFreeHost(host_q);
     cudaFreeHost(host_modadd_result);
-    cudaStreamDestroy(stream1);
-    cudaStreamDestroy(stream2);
-    cudaEventDestroy(event);
+
+    if (stream1) cudaStreamDestroy(stream1);
+    if (stream2) cudaStreamDestroy(stream2);
+    if (event) cudaEventDestroy(event);
 }
 
 int main() {
