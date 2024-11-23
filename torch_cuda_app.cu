@@ -16,7 +16,7 @@ __device__ int compare_bigint(
     const scalar_t* a,
     const scalar_t* b
 ) {
-    for (int i = 7; i >= 0; --i) {
+    for (int i = k - 1; i >= 0; --i) {
         if (a[i] > b[i]) {
             return 1;
         }
@@ -38,13 +38,14 @@ __device__ void add_bigint(
     const uint64_t carry_mask = modulo - 1;
 
     uint64_t carry = 0;
-    for (int i = 0; i < 8; ++i) {
+    for (int i = 0; i < k; ++i) {
         uint64_t sum = (uint64_t)a[i] + (uint64_t)b[i] + carry;
-        result[i] = (scalar_t)(sum & carry_mask);  
-        carry = (sum >> BIT_SIZE);          
+        result[i] = (scalar_t)(sum & carry_mask);
+        carry = (sum >> BIT_SIZE);
     }
     carry_result = static_cast<scalar_t>(carry & carry_mask);
 }
+
 
 
 template <typename scalar_t, int BIT_SIZE>
@@ -54,7 +55,7 @@ __device__ void sub_bigint(
     scalar_t* result
 ) {
     uint64_t borrow = 0;
-    for (int i = 0; i < 8; ++i) {
+    for (int i = 0; i < n; ++i) {
         uint64_t diff = (uint64_t)a[i] - (uint64_t)b[i] - borrow;
         if (a[i] < b[i] + borrow) {
             borrow = 1;
@@ -87,18 +88,17 @@ __global__ void add(
     torch::PackedTensorAccessor32<int, 1, torch::RestrictPtrTraits> carry_out
 ) {
     int idx = blockIdx.x * blockDim.x + threadIdx.x;
+    if (idx >= n) return;
 
     scalar_t carry = 0;
-    scalar_t sum[8] = { 0 };
+    scalar_t sum[k] = { 0 };
 
-    // Perform addition
     add_bigint<scalar_t, BIT_SIZE>(&a[idx][0], &b[idx][0], sum, carry);
 
-    // Write results back
-    for (int i = 0; i < 8; ++i) {
+    for (int i = 0; i < k; ++i) {
         add_result[idx][i] = sum[i];
     }
-    carry_out[idx] = static_cast<int>(carry);
+    carry_out[idx] = static_cast<int>(carry & 1);
 }
 
 
@@ -110,11 +110,12 @@ __global__ void sub(
     torch::PackedTensorAccessor32<scalar_t, 2, torch::RestrictPtrTraits> sub_result
 ) {
     int idx = blockIdx.x * blockDim.x + threadIdx.x;
+    if (idx >= n) return;
 
-    scalar_t diff[8];
+    scalar_t diff[k];
     sub_bigint<scalar_t, BIT_SIZE>(&a[idx][0], &b[idx][0], diff);
 
-    for (int i = 0; i < 8; ++i) {
+    for (int i = 0; i < k; ++i) {
         sub_result[idx][i] = diff[i];
     }
 }
@@ -128,27 +129,27 @@ __global__ void modadd(
     torch::PackedTensorAccessor32<scalar_t, 2, torch::RestrictPtrTraits> result
 ) {
     int idx = blockIdx.x * blockDim.x + threadIdx.x;
+    if (idx >= n) return;
 
     scalar_t carry;
-    scalar_t sum[8];
-    scalar_t sub_res[8];
+    scalar_t sum[k];
+    scalar_t sub_res[k];
 
     // Perform addition
     add_bigint<scalar_t, BIT_SIZE>(&a[idx][0], &b[idx][0], sum, carry);
 
-    // Compare sum with q
     int cmp = compare_bigint<scalar_t>(&sum[0], &q[idx][0]);
 
-    if (cmp >= 0) {
-        // sum >= q, subtract q
+    if (carry > 0 || cmp >= 0) {
+        // sum >= q or there was an overflow, subtract q
         sub_bigint<scalar_t, BIT_SIZE>(&sum[0], &q[idx][0], sub_res);
-        for (int i = 0; i < 8; ++i) {
+        for (int i = 0; i < k; ++i) {
             result[idx][i] = sub_res[i];
         }
     }
     else {
         // sum < q
-        for (int i = 0; i < 8; ++i) {
+        for (int i = 0; i < k; ++i) {
             result[idx][i] = sum[i];
         }
     }
