@@ -4,12 +4,12 @@
 #include <iostream>
 #include <random>
 
-#define CHUNK_BIT_SIZE 4
+#define CHUNK_BIT_SIZE 32
 #define THREADS_PER_BLOCK 256
 
 // Global constexpr for batch size and segments per integer
-constexpr int n = 1; // Number of 256-bit integers in the batch
-constexpr int k = 1; // Number of 32-bit segments per integer
+constexpr int n = 8; // Number of 256-bit integers in the batch
+constexpr int k = 8; // Number of 32-bit segments per integer
 
 template <typename scalar_t>
 __device__ int compare_bigint(
@@ -45,8 +45,6 @@ __device__ void add_bigint(
     }
     carry_result = static_cast<scalar_t>(carry & carry_mask);
 }
-
-
 
 template <typename scalar_t, int BIT_SIZE>
 __device__ void sub_bigint(
@@ -126,8 +124,8 @@ __global__ void modadd(
     const torch::PackedTensorAccessor32<scalar_t, 2, torch::RestrictPtrTraits> a,
     const torch::PackedTensorAccessor32<scalar_t, 2, torch::RestrictPtrTraits> b,
     const torch::PackedTensorAccessor32<scalar_t, 2, torch::RestrictPtrTraits> q,
-    torch::PackedTensorAccessor32<scalar_t, 2, torch::RestrictPtrTraits> result
-) {
+    torch::PackedTensorAccessor32<scalar_t, 2, torch::RestrictPtrTraits> result)
+{
     int idx = blockIdx.x * blockDim.x + threadIdx.x;
     if (idx >= n) return;
 
@@ -223,18 +221,17 @@ void allocateDeviceMemory(
     torch::Tensor& add_result,
     torch::Tensor& carry_result,
     torch::Tensor& sub_result,
-    torch::Tensor& q, // Added q
-    torch::Tensor& modadd_result // Added modadd_result
-) {
-    // Allocate device memory
+    torch::Tensor& q,
+    torch::Tensor& modadd_result)
+{
     a = torch::zeros({ n, k }, torch::kUInt32).to(device);
     b = torch::zeros({ n, k }, torch::kUInt32).to(device);
     compare_result = torch::zeros({ n }, torch::kInt32).to(device);
     add_result = torch::zeros({ n, k }, torch::kUInt32).to(device);
     carry_result = torch::zeros({ n }, torch::kInt32).to(device);
     sub_result = torch::zeros({ n, k }, torch::kUInt32).to(device);
-    q = torch::zeros({ n, k }, torch::kUInt32).to(device); // Allocate q
-    modadd_result = torch::zeros({ n, k }, torch::kUInt32).to(device); // Allocate modadd_result
+    q = torch::zeros({ n, k }, torch::kUInt32).to(device); 
+    modadd_result = torch::zeros({ n, k }, torch::kUInt32).to(device);
 }
 
 // Function to create streams and events
@@ -271,8 +268,7 @@ void launchCompareKernel(torch::Tensor& a, torch::Tensor& b, torch::Tensor& comp
     compare<uint32_t> << <blocks, threads, 0, stream >> > (
         a.packed_accessor32<uint32_t, 2, torch::RestrictPtrTraits>(),
         b.packed_accessor32<uint32_t, 2, torch::RestrictPtrTraits>(),
-        compare_result.packed_accessor32<int, 1, torch::RestrictPtrTraits>()
-        );
+        compare_result.packed_accessor32<int, 1, torch::RestrictPtrTraits>());
 }
 
 // Function to launch add kernel
@@ -284,8 +280,7 @@ void launchAddKernel(torch::Tensor& a, torch::Tensor& b, torch::Tensor& add_resu
         a.packed_accessor32<uint32_t, 2, torch::RestrictPtrTraits>(),
         b.packed_accessor32<uint32_t, 2, torch::RestrictPtrTraits>(),
         add_result.packed_accessor32<uint32_t, 2, torch::RestrictPtrTraits>(),
-        carry_result.packed_accessor32<int, 1, torch::RestrictPtrTraits>()
-        );
+        carry_result.packed_accessor32<int, 1, torch::RestrictPtrTraits>());
 }
 
 // Function to prepare data for subtraction on the device
@@ -316,8 +311,7 @@ void launchSubKernel(torch::Tensor& sub_a, torch::Tensor& sub_b, torch::Tensor& 
     sub<uint32_t, CHUNK_BIT_SIZE> << <blocks, threads, 0, stream >> > (
         sub_a.packed_accessor32<uint32_t, 2, torch::RestrictPtrTraits>(),
         sub_b.packed_accessor32<uint32_t, 2, torch::RestrictPtrTraits>(),
-        sub_result.packed_accessor32<uint32_t, 2, torch::RestrictPtrTraits>()
-        );
+        sub_result.packed_accessor32<uint32_t, 2, torch::RestrictPtrTraits>());
 }
 
 // Function to launch modadd kernel
@@ -329,8 +323,7 @@ void launchModAddKernel(torch::Tensor& a, torch::Tensor& b, torch::Tensor& q, to
         a.packed_accessor32<uint32_t, 2, torch::RestrictPtrTraits>(),
         b.packed_accessor32<uint32_t, 2, torch::RestrictPtrTraits>(),
         q.packed_accessor32<uint32_t, 2, torch::RestrictPtrTraits>(),
-        modadd_result.packed_accessor32<uint32_t, 2, torch::RestrictPtrTraits>()
-        );
+        modadd_result.packed_accessor32<uint32_t, 2, torch::RestrictPtrTraits>());
 }
 
 // Updated function to copy data from device to host asynchronously
@@ -346,8 +339,7 @@ void copyDeviceToHostAsync(
     torch::Tensor& compare_result,
     torch::Tensor& modadd_result, 
     cudaStream_t stream_add,
-    cudaStream_t stream_sub
-)
+    cudaStream_t stream_sub)
 {
     // Copy addition results
     cudaMemcpyAsync(host_add_result, add_result.data_ptr<uint32_t>(), n * k * sizeof(uint32_t), cudaMemcpyDeviceToHost, stream_add);
@@ -372,8 +364,8 @@ void printResults(
     int* host_carry_result,
     uint32_t* host_sub_result,
     uint32_t* host_q,
-    uint32_t* host_modadd_result
-) {
+    uint32_t* host_modadd_result)
+{
     // Print `host_a` and `host_b`
     std::cout << "host_a:" << std::endl;
     for (int i = 0; i < n; ++i) {
@@ -454,7 +446,6 @@ void freeResources(
     cudaStream_t stream2,
     cudaEvent_t event
 ) {
-    // Free resources
     cudaFreeHost(host_a);
     cudaFreeHost(host_b);
     cudaFreeHost(host_compare_result);
