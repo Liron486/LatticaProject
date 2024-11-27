@@ -8,7 +8,7 @@
 #define THREADS_PER_BLOCK 256
 
 // Global constexpr for batch size and segments per integer
-constexpr int n = 8; // Number of 256-bit integers in the batch
+constexpr int n = 1; // Number of 256-bit integers in the batch
 constexpr int k = 8; // Number of 32-bit segments per integer
 
 // Error-checking macro
@@ -63,19 +63,27 @@ __device__ void sub_bigint(
     const scalar_t* b,
     scalar_t* result)
 {
+    static_assert(BIT_SIZE <= 8 * sizeof(scalar_t), "BIT_SIZE must fit within scalar_t");
+
     uint64_t borrow = 0;
-    for (int i = 0; i < n; ++i) {
-        uint64_t diff = (uint64_t)a[i] - (uint64_t)b[i] - borrow;
-        if (a[i] < b[i] + borrow) {
+    scalar_t base = (scalar_t)1 << BIT_SIZE;
+
+    for (int i = 0; i < k; ++i) {
+        int64_t diff = (int64_t)a[i] - (int64_t)b[i] - (int64_t)borrow;
+
+        if (diff < 0) {
             borrow = 1;
-            diff += (uint64_t)1 << BIT_SIZE;
+            diff += base; // Adjust diff by adding the base if negative
         }
         else {
-            borrow = 0;
+            borrow = 0; // Reset borrow if no underflow
         }
-        result[i] = (scalar_t)(diff & ((1ULL << BIT_SIZE) - 1));
+
+        result[i] = (scalar_t)(diff & (base - 1));
     }
 }
+
+
 
 // Kernel to compare two 256-bit integers
 template <typename scalar_t>
