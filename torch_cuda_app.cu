@@ -110,13 +110,7 @@ __global__ void add(
     if (idx >= n) return;
 
     scalar_t carry = 0;
-    scalar_t sum[k] = { 0 };
-
-    add_bigint<scalar_t, BIT_SIZE>(&a[idx][0], &b[idx][0], sum, carry);
-
-    for (int i = 0; i < k; ++i) {
-        add_result[idx][i] = sum[i];
-    }
+    add_bigint<scalar_t, BIT_SIZE>(&a[idx][0], &b[idx][0], &add_result[idx][0], carry);
     carry_out[idx] = static_cast<int>(carry & 1);
 }
 
@@ -131,12 +125,7 @@ __global__ void sub(
     int idx = blockIdx.x * blockDim.x + threadIdx.x;
     if (idx >= n) return;
 
-    scalar_t diff[k];
-    sub_bigint<scalar_t, BIT_SIZE>(&a[idx][0], &b[idx][0], diff);
-
-    for (int i = 0; i < k; ++i) {
-        sub_result[idx][i] = diff[i];
-    }
+    sub_bigint<scalar_t, BIT_SIZE>(&a[idx][0], &b[idx][0], &sub_result[idx][0]);
 }
 
 // Kernel to perform modular addition
@@ -225,7 +214,11 @@ void allocateAndInitializeHostTensors(
 
 
 // Function to create streams and events
-void createStreamsAndEvents(cudaStream_t& stream1, cudaStream_t& stream2, cudaEvent_t& event) {
+void createStreamsAndEvents(
+    cudaStream_t& stream1, 
+    cudaStream_t& stream2, 
+    cudaEvent_t& event) 
+{
     CHECK_CUDA_ERROR(cudaStreamCreate(&stream1));
     CHECK_CUDA_ERROR(cudaStreamCreate(&stream2));
     CHECK_CUDA_ERROR(cudaEventCreate(&event));
@@ -248,7 +241,11 @@ void copyHostToDeviceTensors(
 
 
 // Function to launch compare kernel
-void launchCompareKernel(torch::Tensor& a, torch::Tensor& b, torch::Tensor& compare_result, cudaStream_t stream)
+void launchCompareKernel(
+    torch::Tensor& a, 
+    torch::Tensor& b, 
+    torch::Tensor& compare_result, 
+    cudaStream_t stream)
 {
     int threads = THREADS_PER_BLOCK;
     int blocks = (n + threads - 1) / threads;
@@ -260,7 +257,12 @@ void launchCompareKernel(torch::Tensor& a, torch::Tensor& b, torch::Tensor& comp
 }
 
 // Function to launch add kernel
-void launchAddKernel(torch::Tensor& a, torch::Tensor& b, torch::Tensor& add_result, torch::Tensor& carry_result, cudaStream_t stream)
+void launchAddKernel(
+    torch::Tensor& a, 
+    torch::Tensor& b, 
+    torch::Tensor& add_result, 
+    torch::Tensor& carry_result, 
+    cudaStream_t stream)
 {
     int threads = THREADS_PER_BLOCK;
     int blocks = (n + threads - 1) / threads;
@@ -293,7 +295,11 @@ void prepareSubtractionData(
 }
 
 // Function to launch subtraction kernel
-void launchSubKernel(torch::Tensor& sub_a, torch::Tensor& sub_b, torch::Tensor& sub_result, cudaStream_t stream) 
+void launchSubKernel(
+    torch::Tensor& sub_a, 
+    torch::Tensor& sub_b, 
+    torch::Tensor& sub_result, 
+    cudaStream_t stream) 
 {
     int threads = THREADS_PER_BLOCK;
     int blocks = (n + threads - 1) / threads;
@@ -305,7 +311,12 @@ void launchSubKernel(torch::Tensor& sub_a, torch::Tensor& sub_b, torch::Tensor& 
 }
 
 // Function to launch modadd kernel
-void launchModAddKernel(torch::Tensor& a, torch::Tensor& b, torch::Tensor& q, torch::Tensor& modadd_result, cudaStream_t stream) 
+void launchModAddKernel(
+    torch::Tensor& a,
+    torch::Tensor& b,
+    torch::Tensor& q,
+    torch::Tensor& modadd_result, 
+    cudaStream_t stream) 
 {
     int threads = THREADS_PER_BLOCK;
     int blocks = (n + threads - 1) / threads;
