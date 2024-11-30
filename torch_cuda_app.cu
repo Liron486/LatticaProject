@@ -4,6 +4,10 @@
 #include <iostream>
 #include <random>
 
+#ifdef ENABLE_TESTS
+#include <gtest/gtest.h>
+#endif
+
 #define CHUNK_BIT_SIZE 32
 #define THREADS_PER_BLOCK 256
 
@@ -457,8 +461,13 @@ void printResults(
 }
 
 
-int main()
+int main(int argc, char** argv)
 {
+#ifdef ENABLE_TESTS
+    printf("HERE %d\n", ENABLE_TESTS);
+    ::testing::InitGoogleTest(&argc, argv);
+    return RUN_ALL_TESTS();
+#else
     torch::Device device(torch::kCUDA);
     cudaStream_t stream1, stream2;
     cudaEvent_t event;
@@ -514,4 +523,5 @@ int main()
     cudaEventDestroy(event);
 
     return 0;
+#endif
 }
