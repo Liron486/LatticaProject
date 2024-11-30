@@ -231,7 +231,7 @@ TEST_F(LaunchSubKernelTest, MSBAndLSB) {
     uint32_t msb_value = (1u << 31); 
     sub_a.fill_(msb_value);
 
-    uint32_t lsb_value = 1; 
+    uint32_t lsb_value = 1;
     sub_b.fill_(lsb_value);
 
     // Launch the subtraction kernel
@@ -256,5 +256,125 @@ TEST_F(LaunchSubKernelTest, MSBAndLSB) {
         }
     }
 }
+
+// Test suite for modular addition kernel
+class LaunchModAddKernelTest : public ::testing::Test {
+protected:
+    torch::Tensor a, b, q, modadd_result;
+
+    void SetUp() override {
+        // Allocate tensors
+        a = torch::zeros({ n, k }, torch::kUInt32).to(torch::kCUDA);
+        b = torch::zeros({ n, k }, torch::kUInt32).to(torch::kCUDA);
+        q = torch::zeros({ n, k }, torch::kUInt32).to(torch::kCUDA);
+        modadd_result = torch::zeros({ n, k }, torch::kUInt32).to(torch::kCUDA);
+    }
+};
+
+// MODADD Test Case 1: All inputs are zero
+TEST_F(LaunchModAddKernelTest, ModAddZeros) {
+    launchModAddKernel(a, b, q, modadd_result);
+    torch::Tensor expected_result = torch::zeros({ n, k }, torch::kUInt32).to(torch::kCUDA);
+
+    ASSERT_TRUE(torch::allclose(modadd_result, expected_result));
+}
+
+// MODADD Test Case 2: a + b < q
+TEST_F(LaunchModAddKernelTest, SumLessThanQ) {
+    a.fill_(42);
+    b.fill_(58);
+    q.fill_(200);
+
+    launchModAddKernel(a, b, q, modadd_result);
+    torch::Tensor expected_result = torch::full({ n, k }, 100, torch::kUInt32).to(torch::kCUDA);
+
+    ASSERT_TRUE(torch::allclose(modadd_result, expected_result));
+}
+
+// MODADD Test Case 3: a + b == q
+TEST_F(LaunchModAddKernelTest, SumEqualsQ) {
+    a.fill_(50);
+    b.fill_(50);
+    q.fill_(100);
+
+    launchModAddKernel(a, b, q, modadd_result);
+    torch::Tensor expected_result = torch::zeros({ n, k }, torch::kUInt32).to(torch::kCUDA);
+
+    ASSERT_TRUE(torch::allclose(modadd_result, expected_result));
+}
+
+// MODADD Test Case 4: a + b > q
+TEST_F(LaunchModAddKernelTest, SumGreaterThanQ) {
+    a.fill_(150);
+    b.fill_(100);
+    q.fill_(200);
+
+    launchModAddKernel(a, b, q, modadd_result);
+    torch::Tensor expected_result = torch::full({ n, k }, 50, torch::kUInt32).to(torch::kCUDA);
+
+    ASSERT_TRUE(torch::allclose(modadd_result, expected_result));
+}
+
+// MODADD Test Case 5: a == 0, b == 0, q == max value
+TEST_F(LaunchModAddKernelTest, ModAddMaxQWithZeroInputs) {
+    q.fill_(UINT32_MAX);
+
+    launchModAddKernel(a, b, q, modadd_result);
+    torch::Tensor expected_result = torch::zeros({ n, k }, torch::kUInt32).to(torch::kCUDA);
+
+    ASSERT_TRUE(torch::allclose(modadd_result, expected_result));
+}
+
+// MODADD Test Case 6: Edge case - Large values near q
+TEST_F(LaunchModAddKernelTest, LargeValuesNearQ) {
+    a.fill_(UINT32_MAX - 1);
+    b.fill_(1);
+    q.fill_(UINT32_MAX);
+
+    launchModAddKernel(a, b, q, modadd_result);
+    torch::Tensor expected_result = torch::full({ n, k }, 0, torch::kUInt32).to(torch::kCUDA);
+
+    ASSERT_TRUE(torch::allclose(modadd_result, expected_result));
+}
+
+// MODADD Test Case 7: Randomized values with a, b < q
+TEST_F(LaunchModAddKernelTest, RandomValuesLessThanQ) {
+    a.random_(0, 500);
+    b.random_(0, 500);
+    q.random_(1000, 2000); // Ensure q > a and q > b
+
+    launchModAddKernel(a, b, q, modadd_result);
+
+    auto a_cpu = a.to(torch::kCPU);
+    auto b_cpu = b.to(torch::kCPU);
+    auto q_cpu = q.to(torch::kCPU);
+    auto modadd_result_cpu = modadd_result.to(torch::kCPU);
+
+    auto a_accessor = a_cpu.accessor<uint32_t, 2>();
+    auto b_accessor = b_cpu.accessor<uint32_t, 2>();
+    auto q_accessor = q_cpu.accessor<uint32_t, 2>();
+    auto result_accessor = modadd_result_cpu.accessor<uint32_t, 2>();
+
+    for (int i = 0; i < n; ++i) {
+        for (int j = 0; j < k; ++j) {
+            uint32_t expected_value = (a_accessor[i][j] + b_accessor[i][j]) % q_accessor[i][j];
+            ASSERT_EQ(result_accessor[i][j], expected_value)
+                << "Mismatch at index (" << i << ", " << j << ")";
+        }
+    }
+}
+
+// MODADD Test Case 8: All inputs are at their maximum values
+TEST_F(LaunchModAddKernelTest, MaxValues) {
+    a.fill_(UINT32_MAX - 1);
+    b.fill_(UINT32_MAX - 1);
+    q.fill_(UINT32_MAX);
+
+    launchModAddKernel(a, b, q, modadd_result);
+    torch::Tensor expected_result = torch::full({ n, k }, (UINT32_MAX - 2) % UINT32_MAX, torch::kUInt32).to(torch::kCUDA);
+
+    ASSERT_TRUE(torch::allclose(modadd_result, expected_result));
+}
+
 
 
