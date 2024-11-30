@@ -3,11 +3,7 @@
 #include <torch/torch.h>
 #include <torch/cuda.h>
 
-// A simple test to verify Google Test setup
-TEST(SimpleTest, BasicAssertion) {
-    // Test passes if 1 is equal to 1
-    ASSERT_EQ(1, 1) << "1 should be equal to 1.";
-}
+#include "torch_cuda_app.hpp"
 
 // A test to check if CUDA is available
 TEST(CUDATest, CheckCudaAvailability) {
@@ -21,15 +17,70 @@ TEST(CUDATest, CheckCudaAvailability) {
     }
 }
 
-// A test to check if PyTorch tensors can be created on CUDA
-TEST(TensorTest, CreateCudaTensor) {
-    if (torch::cuda::is_available()) {
-        // Create a tensor on CUDA
-        auto tensor = torch::rand({ 10, 10 }, torch::device(torch::kCUDA));
-        ASSERT_EQ(tensor.device().type(), torch::kCUDA) << "Tensor should be on CUDA device.";
-        ASSERT_EQ(tensor.sizes(), torch::IntArrayRef({ 10, 10 })) << "Tensor size should be 10x10.";
+// Test suite for compare kernel
+TEST(CompareKernelTest, BasicCases)
+{
+    // Set up tensors
+    torch::Device device(torch::kCUDA);
+    torch::Tensor a = torch::zeros({ n, k }, torch::kUInt32).to(device);
+    torch::Tensor b = torch::zeros({ n, k }, torch::kUInt32).to(device);
+    torch::Tensor result = torch::zeros({ n }, torch::kInt32).to(device);
+
+    cudaStream_t stream;
+    cudaStreamCreate(&stream);
+
+    // Test 1: Equal values
+    a.fill_(1);
+    b.fill_(1);
+    launchCompareKernel(a, b, result);
+    cudaStreamSynchronize(stream);
+    auto result_cpu = result.to(torch::kCPU);
+    for (int i = 0; i < n; ++i) {
+        ASSERT_EQ(result_cpu[i].item<int>(), 1) << "Failed for equal values";
     }
-    else {
-        GTEST_SKIP() << "CUDA is not available. Skipping tensor creation test.";
+
+    // Test 2: a > b
+    a.fill_(2);
+    b.fill_(1);
+    launchCompareKernel(a, b, result, stream);
+    cudaStreamSynchronize(stream);
+    result_cpu = result.to(torch::kCPU);
+    for (int i = 0; i < n; ++i) {
+        ASSERT_EQ(result_cpu[i].item<int>(), 1) << "Failed for a > b";
     }
+
+    // Test 3: b > a
+    a.fill_(1);
+    b.fill_(2);
+    launchCompareKernel(a, b, result, stream);
+    cudaStreamSynchronize(stream);
+    result_cpu = result.to(torch::kCPU);
+    for (int i = 0; i < n; ++i) {
+        ASSERT_EQ(result_cpu[i].item<int>(), 0) << "Failed for b > a";
+    }
+
+    // Test 4: Edge case - All zeros
+    a.zero_();
+    b.zero_();
+    launchCompareKernel(a, b, result, stream);
+    cudaStreamSynchronize(stream);
+    result_cpu = result.to(torch::kCPU);
+    for (int i = 0; i < n; ++i) {
+        ASSERT_EQ(result_cpu[i].item<int>(), 1) << "Failed for all zeros";
+    }
+
+    // Test 5: Edge case - Maximum values
+    uint32_t max_value = (1u << 32) - 1;
+    a.fill_(max_value);
+    b.fill_(max_value);
+    launchCompareKernel(a, b, result, stream);
+    cudaStreamSynchronize(stream);
+    result_cpu = result.to(torch::kCPU);
+    for (int i = 0; i < n; ++i) {
+        ASSERT_EQ(result_cpu[i].item<int>(), 1) << "Failed for max values";
+    }
+
+    // Cleanup
+    cudaStreamDestroy(stream);
 }
+

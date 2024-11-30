@@ -1,19 +1,13 @@
-#include <cuda_runtime.h>
-#include <torch/cuda.h>
-#include <torch/types.h>
-#include <iostream>
 #include <random>
 
 #ifdef ENABLE_TESTS
 #include <gtest/gtest.h>
 #endif
 
+#include "torch_cuda_app.hpp"
+
 #define CHUNK_BIT_SIZE 32
 #define THREADS_PER_BLOCK 256
-
-// Global constexpr for batch size and segments per integer
-constexpr int n = 2; // Number of 256-bit integers in the batch
-constexpr int k = 8; // Number of 32-bit segments per integer
 
 // Error-checking macro
 #define CHECK_CUDA_ERROR(call)                                                                 \
