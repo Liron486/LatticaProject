@@ -8,7 +8,7 @@
 #include <random>
 
 // Constants
-constexpr int n = 2; // Number of 256-bit integers in the batch
+constexpr int n = 8; // Number of 256-bit integers in the batch
 constexpr int k = 8; // Number of 32-bit segments per integer
 
 // Function to launch compare kernel
