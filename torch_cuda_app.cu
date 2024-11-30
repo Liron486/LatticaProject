@@ -8,7 +8,7 @@
 #define THREADS_PER_BLOCK 256
 
 // Global constexpr for batch size and segments per integer
-constexpr int n = 1; // Number of 256-bit integers in the batch
+constexpr int n = 2; // Number of 256-bit integers in the batch
 constexpr int k = 8; // Number of 32-bit segments per integer
 
 // Error-checking macro
@@ -45,6 +45,8 @@ __device__ void add_bigint(
     scalar_t* result,
     scalar_t& carry_result)
 {
+    static_assert(BIT_SIZE <= sizeof(scalar_t) * 8, "BIT_SIZE must fit within scalar_t");
+
     const uint64_t modulo = (1ULL << BIT_SIZE);
     const uint64_t carry_mask = modulo - 1;
 
@@ -180,9 +182,7 @@ __global__ void prepare_subtraction_data_kernel(
     torch::PackedTensorAccessor32<uint32_t, 2, torch::RestrictPtrTraits> sub_b)
 {
     int idx = blockIdx.x * blockDim.x + threadIdx.x;
-    if (idx >= n * k) {
-        return;
-    }
+    if (idx >= n * k) return;
 
     int row = idx / k;
     int col = idx % k;
@@ -197,59 +197,32 @@ __global__ void prepare_subtraction_data_kernel(
     }
 }
 
-// Function to allocate and initialize host memory
-void allocateAndInitializeHostMemory(
-    uint32_t*& host_a,
-    uint32_t*& host_b,
-    int*& host_compare_result,
-    uint32_t*& host_add_result,
-    int*& host_carry_result,
-    uint32_t*& host_sub_result,
-    uint32_t*& host_q,
-    uint32_t*& host_modadd_result)
+// Function to allocate and initialize host tensors
+void allocateAndInitializeHostTensors(
+    torch::Tensor& host_a,
+    torch::Tensor& host_b,
+    torch::Tensor& host_q)
 {
-    CHECK_CUDA_ERROR(cudaMallocHost(&host_a, n * k * sizeof(uint32_t)));
-    CHECK_CUDA_ERROR(cudaMallocHost(&host_b, n * k * sizeof(uint32_t)));
-    CHECK_CUDA_ERROR(cudaMallocHost(&host_compare_result, n * sizeof(int)));
-    CHECK_CUDA_ERROR(cudaMallocHost(&host_add_result, n * k * sizeof(uint32_t)));
-    CHECK_CUDA_ERROR(cudaMallocHost(&host_carry_result, n * sizeof(int)));
-    CHECK_CUDA_ERROR(cudaMallocHost(&host_sub_result, n * k * sizeof(uint32_t)));
-    CHECK_CUDA_ERROR(cudaMallocHost(&host_q, n * k * sizeof(uint32_t)));
-    CHECK_CUDA_ERROR(cudaMallocHost(&host_modadd_result, n * k * sizeof(uint32_t)));
-
+    // Random number generator for initialization
     std::random_device rd;
     std::mt19937 gen(rd());
     uint32_t max_value = (1u << CHUNK_BIT_SIZE) - 1;
     std::uniform_int_distribution<uint32_t> dist(0, max_value);
 
+    // Create host tensors with pinned memory for fast host-to-device transfer
+    host_a = torch::empty({ n, k }, torch::TensorOptions().dtype(torch::kUInt32).pinned_memory(true));
+    host_b = torch::empty({ n, k }, torch::TensorOptions().dtype(torch::kUInt32).pinned_memory(true));
+    host_q = torch::full({ n, k }, max_value, torch::TensorOptions().dtype(torch::kUInt32).pinned_memory(true));
+
+    // Initialize the tensors with random values
+    auto* host_a_ptr = host_a.data_ptr<uint32_t>();
+    auto* host_b_ptr = host_b.data_ptr<uint32_t>();
     for (int i = 0; i < n * k; ++i) {
-        host_a[i] = dist(gen);
-        host_b[i] = dist(gen);
-        host_q[i] = max_value;
+        host_a_ptr[i] = dist(gen);
+        host_b_ptr[i] = dist(gen);
     }
 }
 
-// Function to allocate device memory
-void allocateDeviceMemory(
-    torch::Device device,
-    torch::Tensor& a,
-    torch::Tensor& b,
-    torch::Tensor& compare_result,
-    torch::Tensor& add_result,
-    torch::Tensor& carry_result,
-    torch::Tensor& sub_result,
-    torch::Tensor& q,
-    torch::Tensor& modadd_result)
-{
-    a = torch::zeros({ n, k }, torch::kUInt32).to(device);
-    b = torch::zeros({ n, k }, torch::kUInt32).to(device);
-    compare_result = torch::zeros({ n }, torch::kInt32).to(device);
-    add_result = torch::zeros({ n, k }, torch::kUInt32).to(device);
-    carry_result = torch::zeros({ n }, torch::kInt32).to(device);
-    sub_result = torch::zeros({ n, k }, torch::kUInt32).to(device);
-    q = torch::zeros({ n, k }, torch::kUInt32).to(device); 
-    modadd_result = torch::zeros({ n, k }, torch::kUInt32).to(device);
-}
 
 // Function to create streams and events
 void createStreamsAndEvents(cudaStream_t& stream1, cudaStream_t& stream2, cudaEvent_t& event) {
@@ -258,21 +231,21 @@ void createStreamsAndEvents(cudaStream_t& stream1, cudaStream_t& stream2, cudaEv
     CHECK_CUDA_ERROR(cudaEventCreate(&event));
 }
 
-// Function to copy data from host to device asynchronously
-void copyHostToDeviceAsync(
-    uint32_t* host_a,
-    uint32_t* host_b,
-    uint32_t* host_q,
-    torch::Tensor& a,
-    torch::Tensor& b,
-    torch::Tensor& q, 
+// Function to copy data from host tensors to device tensors
+void copyHostToDeviceTensors(
+    torch::Tensor& host_a,
+    torch::Tensor& host_b,
+    torch::Tensor& host_q,
+    torch::Tensor& device_a,
+    torch::Tensor& device_b,
+    torch::Tensor& device_q,
     cudaStream_t stream)
 {
-    // Asynchronous data transfer in stream
-    cudaMemcpyAsync(a.data_ptr<uint32_t>(), host_a, n * k * sizeof(uint32_t), cudaMemcpyHostToDevice, stream);
-    cudaMemcpyAsync(b.data_ptr<uint32_t>(), host_b, n * k * sizeof(uint32_t), cudaMemcpyHostToDevice, stream);
-    cudaMemcpyAsync(q.data_ptr<uint32_t>(), host_q, n * k * sizeof(uint32_t), cudaMemcpyHostToDevice, stream);
+    device_a = host_a.to(torch::kCUDA, true, stream);
+    device_b = host_b.to(torch::kCUDA, true, stream);
+    device_q = host_q.to(torch::kCUDA, true, stream);
 }
+
 
 // Function to launch compare kernel
 void launchCompareKernel(torch::Tensor& a, torch::Tensor& b, torch::Tensor& compare_result, cudaStream_t stream)
@@ -344,61 +317,83 @@ void launchModAddKernel(torch::Tensor& a, torch::Tensor& b, torch::Tensor& q, to
         modadd_result.packed_accessor32<uint32_t, 2, torch::RestrictPtrTraits>());
 }
 
-// Updated function to copy data from device to host asynchronously
-void copyDeviceToHostAsync(
-    uint32_t* host_add_result,
-    int* host_carry_result,
-    uint32_t* host_sub_result,
-    int* host_compare_result,
-    uint32_t* host_modadd_result,
+// Function to copy data from device tensors to host tensors
+void copyDeviceToHostTensors(
+    torch::Tensor& device_add_result,
+    torch::Tensor& device_carry_result,
+    torch::Tensor& device_sub_result,
+    torch::Tensor& device_compare_result,
+    torch::Tensor& device_modadd_result,
+    torch::Tensor& host_add_result,
+    torch::Tensor& host_carry_result,
+    torch::Tensor& host_sub_result,
+    torch::Tensor& host_compare_result,
+    torch::Tensor& host_modadd_result)
+{
+    host_add_result = device_add_result.to(torch::kCPU, true);
+    host_carry_result = device_carry_result.to(torch::kCPU, true);
+    host_sub_result = device_sub_result.to(torch::kCPU, true);
+    host_compare_result = device_compare_result.to(torch::kCPU, true);
+    host_modadd_result = device_modadd_result.to(torch::kCPU, true);
+}
+
+// Function to allocate device memory
+void allocateDeviceMemory(
+    torch::Device device,
+    torch::Tensor& a,
+    torch::Tensor& b,
+    torch::Tensor& compare_result,
     torch::Tensor& add_result,
     torch::Tensor& carry_result,
     torch::Tensor& sub_result,
-    torch::Tensor& compare_result,
-    torch::Tensor& modadd_result, 
-    cudaStream_t stream_add,
-    cudaStream_t stream_sub)
+    torch::Tensor& q,
+    torch::Tensor& modadd_result)
 {
-    // Copy addition results
-    cudaMemcpyAsync(host_add_result, add_result.data_ptr<uint32_t>(), n * k * sizeof(uint32_t), cudaMemcpyDeviceToHost, stream_add);
-    cudaMemcpyAsync(host_carry_result, carry_result.data_ptr<int>(), n * sizeof(int), cudaMemcpyDeviceToHost, stream_add);
-
-    // Copy subtraction results
-    cudaMemcpyAsync(host_sub_result, sub_result.data_ptr<uint32_t>(), n * k * sizeof(uint32_t), cudaMemcpyDeviceToHost, stream_sub);
-
-    // Copy comparison results
-    cudaMemcpyAsync(host_compare_result, compare_result.data_ptr<int>(), n * sizeof(int), cudaMemcpyDeviceToHost, stream_sub);
-
-    // Copy modadd results
-    cudaMemcpyAsync(host_modadd_result, modadd_result.data_ptr<uint32_t>(), n * k * sizeof(uint32_t), cudaMemcpyDeviceToHost, stream_add);
+    a = torch::zeros({ n, k }, torch::kUInt32).to(device);
+    b = torch::zeros({ n, k }, torch::kUInt32).to(device);
+    compare_result = torch::zeros({ n }, torch::kInt32).to(device);
+    add_result = torch::zeros({ n, k }, torch::kUInt32).to(device);
+    carry_result = torch::zeros({ n }, torch::kInt32).to(device);
+    sub_result = torch::zeros({ n, k }, torch::kUInt32).to(device);
+    q = torch::zeros({ n, k }, torch::kUInt32).to(device);
+    modadd_result = torch::zeros({ n, k }, torch::kUInt32).to(device);
 }
 
-// Function to print results
 void printResults(
-    uint32_t* host_a,
-    uint32_t* host_b,
-    int* host_compare_result,
-    uint32_t* host_add_result,
-    int* host_carry_result,
-    uint32_t* host_sub_result,
-    uint32_t* host_q,
-    uint32_t* host_modadd_result)
+    torch::Tensor& host_a,
+    torch::Tensor& host_b,
+    torch::Tensor& host_compare_result,
+    torch::Tensor& host_add_result,
+    torch::Tensor& host_carry_result,
+    torch::Tensor& host_sub_result,
+    torch::Tensor& host_q,
+    torch::Tensor& host_modadd_result)
 {
-    // Print `host_a` and `host_b`
+    auto* a_ptr = host_a.data_ptr<uint32_t>();
+    auto* b_ptr = host_b.data_ptr<uint32_t>();
+    auto* q_ptr = host_q.data_ptr<uint32_t>();
+    auto* compare_result_ptr = host_compare_result.data_ptr<int>();
+    auto* add_result_ptr = host_add_result.data_ptr<uint32_t>();
+    auto* carry_result_ptr = host_carry_result.data_ptr<int>();
+    auto* sub_result_ptr = host_sub_result.data_ptr<uint32_t>();
+    auto* modadd_result_ptr = host_modadd_result.data_ptr<uint32_t>();
+
+    // Print `host_a`
     std::cout << "host_a:" << std::endl;
     for (int i = 0; i < n; ++i) {
         std::cout << "Row " << i << ": ";
         for (int j = 0; j < k; ++j) {
-            std::cout << host_a[i * k + j] << " ";
+            std::cout << a_ptr[i * k + j] << " ";
         }
         std::cout << std::endl;
     }
 
+    // Print `host_b`
     std::cout << "host_b:" << std::endl;
     for (int i = 0; i < n; ++i) {
         std::cout << "Row " << i << ": ";
         for (int j = 0; j < k; ++j) {
-            std::cout << host_b[i * k + j] << " ";
+            std::cout << b_ptr[i * k + j] << " ";
         }
         std::cout << std::endl;
     }
@@ -406,7 +401,7 @@ void printResults(
     // Print comparison results
     std::cout << "\n\nComparison Results:" << std::endl;
     for (int i = 0; i < n; ++i) {
-        std::cout << "Result[" << i << "] = " << host_compare_result[i] << std::endl;
+        std::cout << "Result[" << i << "] = " << compare_result_ptr[i] << std::endl;
     }
 
     // Print addition results
@@ -414,9 +409,9 @@ void printResults(
     for (int i = 0; i < n; ++i) {
         std::cout << "Row " << i << ": ";
         for (int j = 0; j < k; ++j) {
-            std::cout << host_add_result[i * k + j] << " ";
+            std::cout << add_result_ptr[i * k + j] << " ";
         }
-        std::cout << "(Carry: " << host_carry_result[i] << ")" << std::endl;
+        std::cout << "(Carry: " << carry_result_ptr[i] << ")" << std::endl;
     }
 
     // Print subtraction results
@@ -424,111 +419,76 @@ void printResults(
     for (int i = 0; i < n; ++i) {
         std::cout << "Row " << i << ": ";
         for (int j = 0; j < k; ++j) {
-            std::cout << host_sub_result[i * k + j] << " ";
+            std::cout << sub_result_ptr[i * k + j] << " ";
         }
-        std::cout << std::dec << std::endl;
+        std::cout << std::endl;
     }
 
-    // Print modadd results
+    // Print modular addition results
     std::cout << "\n\nModular Addition Results:" << std::endl;
     for (int i = 0; i < n; ++i) {
         std::cout << "Row " << i << ": ";
         for (int j = 0; j < k; ++j) {
-            std::cout << host_modadd_result[i * k + j] << " ";
+            std::cout << modadd_result_ptr[i * k + j] << " ";
         }
-        std::cout << std::dec << std::endl;
+        std::cout << std::endl;
     }
 
-    // Print 'host_q'
+    // Print `host_q`
     std::cout << "\nhost_q:" << std::endl;
     for (int i = 0; i < n; ++i) {
         std::cout << "Row " << i << ": ";
         for (int j = 0; j < k; ++j) {
-            std::cout << host_q[i * k + j] << " ";
+            std::cout << q_ptr[i * k + j] << " ";
         }
         std::cout << std::endl;
     }
 }
 
-// Function to free resources
-void freeResources(
-    uint32_t* host_a,
-    uint32_t* host_b,
-    int* host_compare_result,
-    uint32_t* host_add_result,
-    int* host_carry_result,
-    uint32_t* host_sub_result,
-    uint32_t* host_q,
-    uint32_t* host_modadd_result,
-    cudaStream_t stream1,
-    cudaStream_t stream2,
-    cudaEvent_t event)
-{
-    cudaFreeHost(host_a);
-    cudaFreeHost(host_b);
-    cudaFreeHost(host_compare_result);
-    cudaFreeHost(host_add_result);
-    cudaFreeHost(host_carry_result);
-    cudaFreeHost(host_sub_result);
-    cudaFreeHost(host_q);
-    cudaFreeHost(host_modadd_result);
 
-    if (stream1) cudaStreamDestroy(stream1);
-    if (stream2) cudaStreamDestroy(stream2);
-    if (event) cudaEventDestroy(event);
-}
-
-int main() 
+int main()
 {
     torch::Device device(torch::kCUDA);
-
-    // Host memory pointers
-    uint32_t* host_a = nullptr;
-    uint32_t* host_b = nullptr;
-    int* host_compare_result = nullptr;
-    uint32_t* host_add_result = nullptr;
-    int* host_carry_result = nullptr;
-    uint32_t* host_sub_result = nullptr;
-    uint32_t* host_q = nullptr;
-    uint32_t* host_modadd_result = nullptr;
-
-    // Allocate and initialize host memory
-    allocateAndInitializeHostMemory(host_a, host_b, host_compare_result, host_add_result, host_carry_result, host_sub_result, host_q, host_modadd_result);
-
-    // Device tensors
-    torch::Tensor a, b, compare_result, add_result, carry_result, sub_result, q, modadd_result;
-
-    // Allocate device memory
-    allocateDeviceMemory(device, a, b, compare_result, add_result, carry_result, sub_result, q, modadd_result);
-
-    // Create streams and events
     cudaStream_t stream1, stream2;
     cudaEvent_t event;
     createStreamsAndEvents(stream1, stream2, event);
 
-    // Copy data from host to device asynchronously
-    copyHostToDeviceAsync(host_a, host_b, host_q, a, b, q, stream1);
+    // Host tensors
+    torch::Tensor host_a, host_b, host_q;
+    torch::Tensor host_add_result, host_carry_result, host_sub_result, host_compare_result, host_modadd_result;
 
-    // Record an event in stream1 after data transfer
+    // Allocate and initialize host tensors
+    allocateAndInitializeHostTensors(host_a, host_b, host_q);
+
+    // Device tensors
+    torch::Tensor device_a, device_b, device_q;
+    torch::Tensor device_add_result, device_carry_result, device_sub_result, device_compare_result, device_modadd_result;
+
+    // Allocate device tensors
+    allocateDeviceMemory(device, device_a, device_b, device_compare_result, device_add_result,
+        device_carry_result, device_sub_result, device_q, device_modadd_result);
+
+    // Copy data from host to device
+    copyHostToDeviceTensors(host_a, host_b, host_q, device_a, device_b, device_q, stream1);
+
     cudaEventRecord(event, stream1);
+    cudaStreamWaitEvent(stream2, event);
 
-    // Make stream2 wait for the data transfer to complete
-    cudaStreamWaitEvent(stream2, event, 0);
+    // Launch kernels
+    launchCompareKernel(device_a, device_b, device_compare_result, stream1);
+    launchAddKernel(device_a, device_b, device_add_result, device_carry_result, stream2);
 
-    launchCompareKernel(a, b, compare_result, stream1);
-    launchAddKernel(a, b, add_result, carry_result, stream2);
-
-    //// Prepare data for subtraction on the device
     torch::Tensor sub_a = torch::zeros({ n, k }, torch::kUInt32).to(device);
     torch::Tensor sub_b = torch::zeros({ n, k }, torch::kUInt32).to(device);
-    prepareSubtractionData(compare_result, a, b, sub_a, sub_b, stream1);
 
-    launchSubKernel(sub_a, sub_b, sub_result, stream1);
-    launchModAddKernel(a, b, q, modadd_result, stream2);
+    prepareSubtractionData(device_compare_result, device_a, device_b, sub_a, sub_b, stream1);
+    launchSubKernel(sub_a, sub_b, device_sub_result, stream1);
+    launchModAddKernel(device_a, device_b, device_q, device_modadd_result, stream2);
 
-    // Copy results from device to host asynchronously
-    copyDeviceToHostAsync(host_add_result, host_carry_result, host_sub_result, host_compare_result, host_modadd_result,
-        add_result, carry_result, sub_result, compare_result, modadd_result, stream2, stream1);
+    // Copy results from device to host
+    copyDeviceToHostTensors(device_add_result, device_carry_result, device_sub_result, device_compare_result,
+        device_modadd_result, host_add_result, host_carry_result, host_sub_result,
+        host_compare_result, host_modadd_result);
 
     // Synchronize streams
     cudaStreamSynchronize(stream1);
@@ -538,7 +498,9 @@ int main()
     printResults(host_a, host_b, host_compare_result, host_add_result, host_carry_result, host_sub_result, host_q, host_modadd_result);
 
     // Free resources
-    freeResources(host_a, host_b, host_compare_result, host_add_result, host_carry_result, host_sub_result, host_q, host_modadd_result, stream1, stream2, event);
+    cudaStreamDestroy(stream1);
+    cudaStreamDestroy(stream2);
+    cudaEventDestroy(event);
 
     return 0;
 }
