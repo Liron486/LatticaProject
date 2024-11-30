@@ -5,6 +5,7 @@
 #include <torch/types.h>
 #include <torch/cuda.h>
 #include <iostream>
+#include <random>
 
 // Constants
 constexpr int n = 2; // Number of 256-bit integers in the batch

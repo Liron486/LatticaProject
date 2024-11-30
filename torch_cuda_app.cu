@@ -1,4 +1,3 @@
-#include <random>
 
 #ifdef ENABLE_TESTS
 #include <gtest/gtest.h>
@@ -458,7 +457,6 @@ void printResults(
 int main(int argc, char** argv)
 {
 #ifdef ENABLE_TESTS
-    printf("HERE %d\n", ENABLE_TESTS);
     ::testing::InitGoogleTest(&argc, argv);
     return RUN_ALL_TESTS();
 #else
