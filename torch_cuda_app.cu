@@ -65,7 +65,7 @@ __device__ void sub_bigint(
     static_assert(BIT_SIZE <= 8 * sizeof(scalar_t), "BIT_SIZE must fit within scalar_t");
 
     uint64_t borrow = 0;
-    scalar_t base = (scalar_t)1 << BIT_SIZE;
+    uint64_t base = (1ULL << BIT_SIZE);
 
     for (int i = 0; i < k; ++i) {
         int64_t diff = (int64_t)a[i] - (int64_t)b[i] - (int64_t)borrow;
@@ -192,7 +192,7 @@ void allocateAndInitializeHostTensors(
     // Random number generator for initialization
     std::random_device rd;
     std::mt19937 gen(rd());
-    uint32_t max_value = (1u << CHUNK_BIT_SIZE) - 1;
+    uint32_t max_value = (1ull << CHUNK_BIT_SIZE) - 1;
     std::uniform_int_distribution<uint32_t> dist(0, max_value);
 
     // Create host tensors with pinned memory for fast host-to-device transfer
