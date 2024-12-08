@@ -78,7 +78,7 @@ TEST_F(CompareKernelTest, AllZeros) {
 
 // Compare Test Case 5: Edge case - Maximum values
 TEST_F(CompareKernelTest, MaxValues) {
-    uint32_t max_value = (1ull << 32) - 1;
+    uint32_t max_value = (1ULL << 32) - 1;
     a.fill_(max_value);
     b.fill_(max_value);
 
@@ -216,7 +216,7 @@ TEST_F(LaunchSubKernelTest, SubAGreaterThanB) {
 
 // SUB Test Case 4: Maximum values
 TEST_F(LaunchSubKernelTest, SubMaxValues) {
-    uint32_t max_value = (1ull << 32) - 1;
+    uint32_t max_value = (1ULL << 32) - 1;
     sub_a.fill_(max_value);
     sub_b.fill_(max_value);
 
@@ -228,7 +228,7 @@ TEST_F(LaunchSubKernelTest, SubMaxValues) {
 
 // SUB Test Case 5: borrow test
 TEST_F(LaunchSubKernelTest, MSBAndLSB) {
-    uint32_t msb_value = (1u << 31); 
+    uint32_t msb_value = (1ULL << 31); 
     sub_a.fill_(msb_value);
 
     uint32_t lsb_value = 1;

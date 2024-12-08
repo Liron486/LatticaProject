@@ -92,6 +92,8 @@ __global__ void compare(
     torch::PackedTensorAccessor32<int, 1, torch::RestrictPtrTraits> result)
 {
     int idx = blockIdx.x * blockDim.x + threadIdx.x;
+    if (idx >= n) return;
+
     result[idx] = compare_bigint<scalar_t>(&a[idx][0], &b[idx][0]) >= 0 ? 1 : 0;
 }
 
@@ -137,26 +139,11 @@ __global__ void modadd(
     if (idx >= n) return;
 
     scalar_t carry;
-    scalar_t sum[k];
-    scalar_t sub_res[k];
-
-    // Perform addition
-    add_bigint<scalar_t, BIT_SIZE>(&a[idx][0], &b[idx][0], sum, carry);
-
-    int cmp = compare_bigint<scalar_t>(&sum[0], &q[idx][0]);
-
+    add_bigint<scalar_t, BIT_SIZE>(&a[idx][0], &b[idx][0], &result[idx][0], carry);
+    int cmp = compare_bigint<scalar_t>(&result[idx][0], &q[idx][0]);
     if (carry > 0 || cmp >= 0) {
         // sum >= q or there was an overflow, subtract q
-        sub_bigint<scalar_t, BIT_SIZE>(&sum[0], &q[idx][0], sub_res);
-        for (int i = 0; i < k; ++i) {
-            result[idx][i] = sub_res[i];
-        }
-    }
-    else {
-        // sum < q
-        for (int i = 0; i < k; ++i) {
-            result[idx][i] = sum[i];
-        }
+        sub_bigint<scalar_t, BIT_SIZE>(&result[idx][0], &q[idx][0], &result[idx][0]);
     }
 }
 
@@ -192,7 +179,7 @@ void allocateAndInitializeHostTensors(
     // Random number generator for initialization
     std::random_device rd;
     std::mt19937 gen(rd());
-    uint32_t max_value = (1ull << CHUNK_BIT_SIZE) - 1;
+    uint32_t max_value = (1ULL << CHUNK_BIT_SIZE) - 1;
     std::uniform_int_distribution<uint32_t> dist(0, max_value);
 
     // Create host tensors with pinned memory for fast host-to-device transfer
